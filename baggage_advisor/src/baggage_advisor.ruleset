@@ -1,0 +1,347 @@
+/////////////////////////////////////////////
+// Copyright (c) Gaia Platform LLC
+// All rights reserved.
+/////////////////////////////////////////////
+
+#include <string>
+#include "baggage_advisor/advisor.hpp"
+#include "gaia_baggage_advisor.h"
+
+bool get_available_manifest(gaia::baggage_advisor::manifest_t& result)
+{
+    using namespace gaia::baggage_advisor;
+
+    auto manifest_iter = manifest_t::list().where(manifest_t::expr::state == "NEW").begin();
+
+    // If there are no "NEW" manifests, return an empty string.
+    if (manifest_iter == manifest_t::list().end())
+    {
+        return false;
+    }
+
+    auto writer = manifest_iter->writer();
+    writer.state = "LOADING";
+    writer.update_row();
+
+    result = *manifest_iter;
+    return true;
+}
+
+void insert_and_connect_cart(const char* current_cart_id,
+    gaia::baggage_advisor::manifest_t manifest,
+    gaia::baggage_advisor::cart_area_t cart_area)
+{
+    using namespace gaia::baggage_advisor;
+
+    auto cart_gaia_id = cart_t::insert_row(current_cart_id);
+
+    // Connect that cart to the manifest.
+    manifest.shipment_cart_list().insert(cart_gaia_id);
+
+    // Connect that cart to the cart area.
+    cart_area.cart__cart_area_cart_list().insert(cart_gaia_id);
+}
+
+void insert_and_connect_baggage(const char* current_baggage_id, gaia::baggage_advisor::manifest_t manifest)
+{
+    using namespace gaia::baggage_advisor;
+
+    manifest.baggage__manifest_baggage_list().insert(baggage_t::insert_row(current_baggage_id));
+}
+
+// Here we define our declarative rules
+//
+ruleset baggage_advisor_ruleset
+{
+    // This rule fires when the camera_data_code field changes.
+    OnUpdate(camera.camera_data_code)
+    {
+        // The camera sees a new code
+        //
+        // Reacts to: camera.camera_data_code
+        // Changes: 
+        //      cart_area.last_cart_id
+        //      cart_area.current_cart_id
+        //      cart_area.current_baggage_id
+        //      camera.camera_data_code
+        //
+
+        if (strlen(camera.camera_data_code) == 0)
+        {
+            return;
+        }
+
+        baggage_advisor::advisor::debug_print(std::string("Code Seen : ") + 
+            camera.camera_data_code);
+        
+        std::string first_two_letters = std::string(camera.camera_data_code).substr(0,2);
+
+        if (first_two_letters == "CA")
+        {
+            // Cart Area
+            cart_area.last_cart_id = cart_area.current_cart_id;
+            cart_area.current_cart_id = "";
+        }
+        else if (first_two_letters == "BG")
+        {
+            // Baggage
+            cart_area.current_baggage_id = camera.camera_data_code;
+        }
+        else if (first_two_letters == "CT")
+        {
+            // Cart
+            cart_area.current_cart_id = camera.camera_data_code;
+        }
+        else
+        {
+            baggage_advisor::advisor::send_status_message(
+                std::string("Unidentified Object Seen : ") +
+                camera.camera_data_code, baggage_advisor::e_color::red);
+        }
+
+        // Reset the code that the camera is currently seeing.
+        camera.camera_data_code = "";
+    }
+    OnUpdate(cart_area.current_cart_id)
+    {
+        // A cart has moved onto or off of a cart area
+        //
+        // Reacts to: cart_area.current_cart_id
+        // Changes:
+        // Creates: cart
+        //
+
+        using namespace gaia::baggage_advisor;
+        
+        // cart_area.current_cart_id can be shortened to just current_cart_id because that
+        // field name is unique in the database, it knows it belongs to cart_area.
+        if (strlen(current_cart_id) == 0)
+        {
+            baggage_advisor::advisor::debug_print(std::string("Cart area : ") +
+                cart_area.id + " is empty");
+            return;
+        }
+        
+        baggage_advisor::advisor::debug_print(std::string("Cart: ") + 
+            current_cart_id + " in cart area: " + cart_area.id);
+
+        manifest_t available_manifest;
+        // Find the next new manifest.
+        if (!get_available_manifest(available_manifest))
+        {
+            baggage_advisor::advisor::send_status_message( 
+                std::string("No manifests pending. Do not load cart."), baggage_advisor::e_color::red);    
+            return;
+        }
+        
+        insert_and_connect_cart(current_cart_id, available_manifest,
+            cart_area_t::get(cart_area.gaia_id()));
+
+        baggage_advisor::advisor::debug_print(std::string("Manifest: ") + 
+            available_manifest.id() + " added to cart: " + current_cart_id);
+
+        baggage_advisor::advisor::send_status_message(
+            std::string("Cart ready for loading"), baggage_advisor::e_color::yellow);
+    }
+    {
+        // If last_cart_id changes, check if the cart's manifest was fully loaded
+        // before it moves off the cart area
+        //
+        // Reacts to: cart_area.last_cart_id
+        // Changes:
+        //
+
+        if (strcmp(cart.id, @cart_area.last_cart_id) == 0)
+        {
+            if (strcmp(manifest.state, "FULL") == 0)
+            {
+                baggage_advisor::advisor::send_status_message(
+                    std::string("Cart: ") + @cart_area.last_cart_id +
+                    " removed from cart area: " + cart_area.id,
+                    baggage_advisor::e_color::green);
+            }
+            else
+            {
+                baggage_advisor::advisor::send_status_message(
+                    std::string("Cart: ") +
+                    @cart_area.last_cart_id +
+                    " removed from cart area: " + cart_area.id + 
+                    " was not full, recall cart immediately.", baggage_advisor::e_color::red);
+            }
+        }
+    }
+
+    OnUpdate(cart_area.current_baggage_id)
+    {         
+        // A baggage has moved onto a cart area. Create the associated baggage row
+        // and reset the current_baggage_id field.
+        //
+        // Reacts to: cart_area.current_baggage_id
+        // Changes: cart_area.current_baggage_id
+        // Creates: baggage
+        //
+
+        using namespace gaia::baggage_advisor;
+
+        if (strlen(current_baggage_id) == 0)
+        {
+            return;
+        }
+
+        if (strcmp(cart.id, current_cart_id) == 0)
+        {
+            if (strcmp(manifest_baggage.baggage_id, current_baggage_id) == 0)
+            {
+                // The baggage is in the current cart's manifest.
+                insert_and_connect_baggage(current_baggage_id,
+                    manifest_t::get(manifest.gaia_id()));
+
+                baggage_advisor::advisor::debug_print(std::string("Baggage: ") +
+                    current_baggage_id +
+                    " in cart area: " + cart_area.id +
+                    " added to manifest: " + manifest.id);
+
+                // Reset the current baggage ID, as if no baggage is in the cart area.
+                cart_area.current_baggage_id = "";
+                return;
+            }
+        }
+    }
+
+    OnUpdate(cart_area.current_baggage_id)
+    {
+        // A baggage has moved onto a cart area, and this rule checks if the baggage is
+        // not in the current cart's manifest or if there is no manifest on the cart.
+        //
+        // Reacts to: cart_area.current_baggage_id
+        //
+
+        using namespace gaia::baggage_advisor;
+
+        if (strlen(current_baggage_id) == 0)
+        {
+            return;
+        }
+
+        if (strcmp(cart.id, current_cart_id) == 0)
+        {
+            if (!manifest_t::get(manifest.gaia_id()))
+            {
+                baggage_advisor::advisor::send_status_message(
+                    std::string("No manifest attached to cart ")
+                    + cart.id + ". Remove the baggage.",
+                    baggage_advisor::e_color::red);
+                return;
+            }
+
+            // In the March release, there is no "nomatch" clause to handle
+            // an if() statement not matching any database rows.
+            // We must use EDC code to manually check for an empty result from the where() call.
+            auto manifest_baggage_query = manifest_t::get(manifest.gaia_id())
+                .manifest_baggage__manifest_manifest_baggage_list()
+                .where(manifest_baggage_t::expr::baggage_id == current_baggage_id);
+
+            // If the query returns no results, send a message.
+            if (manifest_baggage_query.begin() == manifest_baggage_query.end())
+            {
+                baggage_advisor::advisor::send_status_message(
+                    std::string("baggage: ") + current_baggage_id
+                    + " is not a line item on manifest " + manifest.id + ". Remove immediately.",
+                    baggage_advisor::e_color::red);
+            }
+        }
+    }
+
+    OnUpdate(cart_area.current_baggage_id)
+    {
+        // A baggage has moved onto a cart area, and this rule checks if there is no cart
+        // in the cart area to put a baggage onto.
+        //
+        // Reacts to: cart_area.current_baggage_id
+        //
+
+        using namespace gaia::baggage_advisor;
+
+        if (strlen(current_baggage_id) == 0)
+        {
+            return;
+        }
+
+        if (strlen(current_cart_id) == 0)
+        {
+            baggage_advisor::advisor::send_status_message(
+                std::string("No cart in cart area ")
+                + cart_area.id + ". Remove the baggage.",
+                baggage_advisor::e_color::red);
+            return;
+        }
+    }
+
+    OnInsert(baggage)
+    {
+        // A baggage has been added to a manifest
+        //
+        // Reacts to: baggage.LastOperation
+        // Changes: manifest.actual_qty
+        //
+
+        using namespace gaia::baggage_advisor;
+
+        if (!manifest_t::get(manifest.gaia_id()))
+        {
+            return;
+        }
+
+        if ((manifest.actual_qty + 1) > manifest.desired_qty)
+        {
+            baggage_advisor::advisor::send_status_message(
+                std::string("Too many baggages on manifest: ") +
+                manifest.id, baggage_advisor::e_color::red);
+        }
+        else
+        {
+            baggage_advisor::advisor::send_status_message(
+                std::string("Baggage : ") + baggage.id + " added to manifest: " +
+                manifest.id, baggage_advisor::e_color::yellow);
+
+            manifest.actual_qty += 1;
+        }
+    }
+
+    {
+        // Check if manifest is full
+        //
+        // Reacts to: manifest.actual_qty
+        // Changes: manifest.state
+        //
+        if (@manifest.actual_qty == manifest.desired_qty)
+        {
+            baggage_advisor::advisor::send_status_message(
+                std::string("Manifest : ") + manifest.id +
+                " is complete with : " + std::to_string(manifest.desired_qty) + " baggages", baggage_advisor::e_color::green);
+
+            manifest.state = "FULL";
+        }
+        else
+        {
+            baggage_advisor::advisor::send_status_message(
+                std::string("Manifest : ") + manifest.id +
+                " has " + std::to_string(@manifest.actual_qty) +
+                " of " + std::to_string(manifest.desired_qty) + " baggages", baggage_advisor::e_color::yellow);
+        }
+    }
+
+    {
+        // Check if manifest line item is over full
+        //
+        // Reacts to: manifest_baggage.actual_qty
+        // Changes:
+        //
+        if (@manifest_baggage.actual_qty > manifest_baggage.desired_qty)
+        {
+            baggage_advisor::advisor::send_status_message(
+                std::string("Too many baggages of type : ") + manifest_baggage.baggage_id +
+                " on cart. Remove baggage immediately.", baggage_advisor::e_color::red);
+        }
+    }
+}

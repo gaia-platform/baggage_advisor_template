@@ -1,0 +1,6 @@
+/build
+/install
+/log
+/logs
+/storage
+__pycache__/
