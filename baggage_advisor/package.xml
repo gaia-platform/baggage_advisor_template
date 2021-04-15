@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>baggage_advisor</name>
-  <version>0.0.1</version>
+  <version>0.1.1</version>
   <description>This package bridges ROS2 messages and a Gaia Platform declarative ruleset for the airport-themed Baggage Advisor application template.</description>
   <maintainer email="engineering@gaiaplatform.io">Gaia Platform</maintainer>
   <license>MIT</license>

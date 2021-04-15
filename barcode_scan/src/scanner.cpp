@@ -1,6 +1,7 @@
 /////////////////////////////////////////////
-// Copyright (c) Gaia Platform LLC
-// All rights reserved.
+// Copyright (c) 2021 Gaia Platform LLC
+// This file is made available under the MIT license.
+// Do not use it if you have not received an associated LICENSE file.
 /////////////////////////////////////////////
 
 #include "barcode_scan/scanner.hpp"
