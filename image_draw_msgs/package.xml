@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>image_draw_msgs</name>
-  <version>0.0.1</version>
+  <version>0.1.0</version>
   <description>A package containing a message for drawing basic 2D shapes or text on images. It is an upgrade of visualization_msgs/ImageMarker.msg.</description>
   <maintainer email="engineering@gaiaplatform.io">Gaia Platform</maintainer>
   <license>MIT</license>
