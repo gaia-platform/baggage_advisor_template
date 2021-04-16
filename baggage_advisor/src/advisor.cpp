@@ -132,6 +132,55 @@ void advisor::init_storage()
     gaia::db::commit_transaction();
 }
 
+void advisor::clear_storage()
+{
+    gaia::db::begin_transaction();
+
+    for (auto terminal = terminal_t::get_first() ; terminal ; terminal = terminal_t::get_first())
+    {
+        terminal.cart_area__terminal_cart_area_list().clear();
+        terminal.delete_row();
+    }
+
+    for (auto cart_area = cart_area_t::get_first() ; cart_area ; cart_area = cart_area_t::get_first())
+    {
+        cart_area.camera__cart_area_camera_list().clear();
+        cart_area.cart__cart_area_cart_list().clear();
+        cart_area.delete_row();
+    }
+
+    for (auto camera = camera_t::get_first() ; camera ; camera = camera_t::get_first())
+    {
+        camera.delete_row();
+    }
+
+    for (auto manifest = manifest_t::get_first() ; manifest ; manifest = manifest_t::get_first())
+    {
+        manifest.shipment_cart_list().clear();
+        manifest.manifest_baggage__manifest_manifest_baggage_list().clear();
+        manifest.baggage__manifest_baggage_list().clear();
+        manifest.delete_row();
+    }
+
+    for (auto cart = cart_t::get_first() ; cart ; cart = cart_t::get_first())
+    {
+        cart.delete_row();
+    }
+
+    for (auto manifest_baggage = manifest_baggage_t::get_first() ; manifest_baggage ;
+        manifest_baggage = manifest_baggage_t::get_first())
+    {
+        manifest_baggage.delete_row();
+    }
+
+    for (auto baggage = baggage_t::get_first() ; baggage ; baggage = baggage_t::get_first())
+    {
+        baggage.delete_row();
+    }
+
+    gaia::db::commit_transaction();
+}
+
 void advisor::scan_result_callback(
     const barcode_msgs::msg::ScanResult::SharedPtr scan_result_msg)
 {
