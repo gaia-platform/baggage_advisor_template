@@ -7,7 +7,7 @@
 #pragma once
 
 #include "rclcpp/rclcpp.hpp"
-#include "image_transport/image_transport.h"
+#include "image_transport/image_transport.hpp"
 
 #include "barcode_msgs/msg/scan_result.hpp"
 
